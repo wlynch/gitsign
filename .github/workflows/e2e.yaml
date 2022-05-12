@@ -17,12 +17,13 @@ jobs:
       # org default is permissive or restricted. 
       # See https://docs.github.com/en/actions/security-guides/automatic-token-authentication#permissions-for-the-github_token
       # for more details.
+      # See https://docs.github.com/en/actions/using-jobs/assigning-permissions-to-jobs for a full list of permissions.
       actions: none
       checks: none
-      contents: read
+      contents: none
       deployments: none
       issues: none
-      metadata: none
+      discussions: none
       packages: none
       pages: none
       pull-requests: none
