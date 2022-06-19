@@ -27,7 +27,9 @@ import (
 	"io"
 	"os"
 
+	"github.com/mattn/go-tty"
 	"github.com/sigstore/cosign/pkg/providers"
+	"github.com/sigstore/sigstore/pkg/oauth"
 	"github.com/sigstore/sigstore/pkg/oauthflow"
 	"github.com/sigstore/sigstore/pkg/signature"
 )
@@ -38,31 +40,14 @@ type Identity struct {
 }
 
 func NewIdentity(ctx context.Context, w io.Writer) (*Identity, error) {
-	clientID := envOrValue("GITSIGN_OIDC_CLIENT_ID", "sigstore")
-	var authFlow oauthflow.TokenGetter = oauthflow.DefaultIDTokenGetter
-	if providers.Enabled(ctx) {
-		var err error
-		idToken, err := providers.Provide(ctx, clientID)
-		if err != nil {
-			fmt.Fprintln(w, "error getting id token:", err)
-		}
-		authFlow = &oauthflow.StaticTokenGetter{RawToken: idToken}
+	client, err := newClientFromEnv(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("error creating Fulcio client: %w", err)
 	}
 
 	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, fmt.Errorf("generating private key: %w", err)
-	}
-
-	client, err := NewClient(envOrValue("GITSIGN_FULCIO_URL", "https://fulcio.sigstore.dev"),
-		OIDCOptions{
-			Issuer:      envOrValue("GITSIGN_OIDC_ISSUER", "https://oauth2.sigstore.dev/auth"),
-			ClientID:    clientID,
-			RedirectURL: os.Getenv("GITSIGN_OIDC_REDIRECT_URL"),
-			TokenGetter: authFlow,
-		})
-	if err != nil {
-		return nil, fmt.Errorf("error creating Fulcio client: %w", err)
 	}
 
 	cert, err := client.GetCert(priv)
@@ -143,4 +128,52 @@ func (i *Identity) PublicKey() (crypto.PublicKey, error) {
 
 func (i *Identity) SignerVerifier() *CertSignerVerifier {
 	return i.sv
+}
+
+func newClientFromEnv(ctx context.Context) (*Client, error) {
+	tty, err := tty.Open()
+	if err != nil {
+		return nil, fmt.Errorf("error opening TTY: %w", err)
+	}
+	defer tty.Close()
+	tty.Buffered()
+
+	clientID := envOrValue("GITSIGN_OIDC_CLIENT_ID", "sigstore")
+	issuer := envOrValue("GITSIGN_OIDC_ISSUER", "https://oauth2.sigstore.dev/auth")
+	redirectURL := os.Getenv("GITSIGN_OIDC_REDIRECT_URL")
+
+	var tokenGetter oauthflow.TokenGetter = &oauthflow.InteractiveIDTokenGetter{
+		HTMLPage: oauth.InteractiveSuccessHTML,
+		Input:    tty.Input(),
+		Output:   tty.Output(),
+	}
+	flow := os.Getenv("GITSIGN_OAUTH_FLOW")
+	switch {
+	case flow == "token" || providers.Enabled(ctx):
+		var err error
+		idToken, err := providers.Provide(ctx, clientID)
+		if err != nil {
+			fmt.Fprintln(tty.Output(), "error getting id token:", err)
+		}
+		tokenGetter = &oauthflow.StaticTokenGetter{RawToken: idToken}
+		/*
+			case flow == "device":
+				tokenGetter = &oauthflow.DeviceFlowTokenGetter{
+					MessagePrinter: func(s string) { fmt.Fprintln(tty.Output(), s) },
+					Sleeper:        time.Sleep,
+					Issuer:         issuer,
+					CodeURL:        oauthflow.SigstoreDeviceURL,
+					TokenURL:       oauthflow.SigstoreTokenURL,
+				}
+		*/
+	}
+
+	return NewClient(envOrValue("GITSIGN_FULCIO_URL", "https://fulcio.sigstore.dev"),
+		OIDCOptions{
+			Issuer:      issuer,
+			ClientID:    clientID,
+			RedirectURL: redirectURL,
+			TokenGetter: tokenGetter,
+		},
+	)
 }
