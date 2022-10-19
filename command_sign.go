@@ -63,7 +63,7 @@ func commandSign(cfg *config.Config) error {
 
 	sig, cert, err := git.Sign(ctx, rekor, userIdent, dataBuf.Bytes(), signature.SignOptions{
 		Detached:           *detachSignFlag,
-		TimestampAuthority: cfg.TimestampAuthority,
+		TimestampAuthority: cfg.TimestampAuthorityURL,
 		Armor:              *armorFlag,
 		IncludeCerts:       *includeCertsOpt,
 	})

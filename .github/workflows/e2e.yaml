@@ -87,7 +87,8 @@ jobs:
     - name: Test Timestamped Commit
       env:
         # See https://knowledge.digicert.com/generalinformation/INFO4231.html
-        GITSIGN_TIMESTAMP_AUTHORITY: "http://timestamp.digicert.com"
+        GITSIGN_TIMESTAMP_AUTHORITY_URL: "http://timestamp.digicert.com"
+        GITSIGN_TIMESTAMP_AUTHORITY_CERT: "testdata/digicert-tsa.crt"
       run: |
         set -e
 

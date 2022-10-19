@@ -21,6 +21,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"time"
 
 	cms "github.com/github/smimesign/ietf-cms"
 )
@@ -83,6 +84,13 @@ func Sign(ident Identity, body []byte, opts SignOptions) ([]byte, *x509.Certific
 	}
 
 	if len(opts.TimestampAuthority) > 0 {
+		// This is a hack, but we need the timestamp to be generated after the cert start time (second precision),
+		// otherwise timestamp validation will fail because the cert start time is equal to the signed timestamp
+		// and checks are currently exclusive.
+		// This is a bug in the timestamping implementation, since these timestamps should be inclusive:
+		// https://datatracker.ietf.org/doc/html/rfc5280#section-4.1.2.5
+		// Alternatively, we could solve this if we have access to [timestamp.Info.Accuracy].
+		time.Sleep(1 * time.Second)
 		if err = sd.AddTimestamps(opts.TimestampAuthority); err != nil {
 			return nil, nil, fmt.Errorf("failed to add timestamp: %w", err)
 		}

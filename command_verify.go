@@ -25,6 +25,7 @@ import (
 	"github.com/sigstore/gitsign/internal"
 	"github.com/sigstore/gitsign/internal/config"
 	"github.com/sigstore/gitsign/pkg/git"
+	"github.com/sigstore/sigstore/pkg/cryptoutils"
 )
 
 func commandVerify(cfg *config.Config) error {
@@ -45,7 +46,19 @@ func commandVerify(cfg *config.Config) error {
 		return fmt.Errorf("failed to read signature data (detached: %T): %w", detached, err)
 	}
 
-	cv, err := git.NewCertVerifier()
+	opts := []git.CertVerifierOption{}
+	if cfg.TimestampAuthorityCert != "" {
+		b, err := os.ReadFile(cfg.TimestampAuthorityCert)
+		if err != nil {
+			return fmt.Errorf("error reading timestamp authority cert: %w", err)
+		}
+		certs, err := cryptoutils.UnmarshalCertificatesFromPEM(b)
+		if err != nil {
+			return fmt.Errorf("error parsing timestamp authority cert: %w", err)
+		}
+		opts = append(opts, git.AddRootCert(certs...))
+	}
+	cv, err := git.NewCertVerifier(opts...)
 	if err != nil {
 		return fmt.Errorf("error creating git cert verifier: %w", err)
 	}
