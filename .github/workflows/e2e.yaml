@@ -72,6 +72,11 @@ jobs:
 
         # Verify tool is on our path
         gitsign -h
+    - name: Install Cosign
+      uses: sigstore/cosign-installer@main
+    - name: Init roots
+      run: |
+        cosign initialize --mirror $TUF_MIRROR --root ./root.json
     - name: Test Sign and Verify commit
       run: |
         set -e
@@ -82,11 +87,14 @@ jobs:
         # Sign commit
         git commit --allow-empty -S --message="Signed commit"
 
+        git cat-file commit HEAD
+        git cat-file commit HEAD | sed -n '/BEGIN/, /END/p' | sed 's/^ //g' | sed 's/gpgsig //g' | sed 's/SIGNED MESSAGE/PKCS7/g' | openssl pkcs7 -print -print_certs -text
+
         # Verify commit
         git verify-commit HEAD
 
         # Extra debug info
-        git cat-file commit HEAD | sed -n '/BEGIN/, /END/p' | sed 's/^ //g' | sed 's/gpgsig //g' | sed 's/SIGNED MESSAGE/PKCS7/g' | openssl pkcs7 -print -print_certs -text
+        # git cat-file commit HEAD | sed -n '/BEGIN/, /END/p' | sed 's/^ //g' | sed 's/gpgsig //g' | sed 's/SIGNED MESSAGE/PKCS7/g' | openssl pkcs7 -print -print_certs -text
     - name: Test Timestamped Commit
       env:
         # See https://knowledge.digicert.com/generalinformation/INFO4231.html
