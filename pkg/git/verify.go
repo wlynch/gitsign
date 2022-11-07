@@ -78,7 +78,7 @@ func Verify(ctx context.Context, git Verifier, rekor rekor.Verifier, data, sig [
 		return nil, err
 	}
 
-	tlog, err := rekor.Verify(ctx, commit, cert)
+	tlog, err := rekor.Verify(ctx, commit, sig, cert)
 	if err != nil {
 		return nil, fmt.Errorf("failed to validate rekor entry: %w", err)
 	}

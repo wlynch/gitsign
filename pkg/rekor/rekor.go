@@ -18,22 +18,18 @@ package rekor
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/go-openapi/runtime"
-	"github.com/go-openapi/strfmt"
-	"github.com/go-openapi/swag"
 
 	"github.com/sigstore/cosign/pkg/cosign"
 	rekor "github.com/sigstore/rekor/pkg/client"
 	"github.com/sigstore/rekor/pkg/generated/client"
-	"github.com/sigstore/rekor/pkg/generated/client/index"
+	"github.com/sigstore/rekor/pkg/generated/client/entries"
 	"github.com/sigstore/rekor/pkg/generated/models"
 	"github.com/sigstore/rekor/pkg/sharding"
 	"github.com/sigstore/rekor/pkg/types"
@@ -44,7 +40,7 @@ import (
 
 // Verifier represents a mechanism to get and verify Rekor entries for the given Git commit.
 type Verifier interface {
-	Verify(ctx context.Context, commitSHA string, cert *x509.Certificate) (*models.LogEntryAnon, error)
+	Verify(ctx context.Context, commitSHA string, sig []byte, cert *x509.Certificate) (*models.LogEntryAnon, error)
 }
 
 // Writer represents a mechanism to write content to Rekor.
@@ -75,70 +71,58 @@ func (c *Client) Write(ctx context.Context, commitSHA string, sig []byte, cert *
 	return cosign.TLogUpload(ctx, c.Rekor, sig, []byte(commitSHA), pem)
 }
 
-func (c *Client) get(ctx context.Context, data []byte, cert *x509.Certificate) (*models.LogEntryAnon, error) {
+func (c *Client) get(ctx context.Context, data, sig []byte, cert *x509.Certificate) (*models.LogEntryAnon, error) {
 	pem, err := cryptoutils.MarshalCertificateToPEM(cert)
 	if err != nil {
 		return nil, err
 	}
 
-	uuids, err := c.findTLogEntriesByPayloadAndPK(ctx, data, pem)
+	entries, err := c.findTLogEntries(ctx, data, sig, pem)
 	if err != nil {
 		return nil, err
 	}
+	if len(entries) == 0 {
+		return nil, errors.New("could not find matching tlog entry")
 
-	for _, u := range uuids {
-		// Normalize Rekor ID
-		u, err := sharding.GetUUIDFromIDString(u)
-		if err != nil {
-			return nil, fmt.Errorf("invalid rekor UUID: %w", err)
-		}
-
-		e, err := cosign.GetTlogEntry(ctx, c.Rekor, u)
-		if err != nil {
-			return nil, err
-		}
-
-		// Verify that the cert used in the tlog matches the cert
-		// used to sign the data.
-		tlogCerts, err := extractCerts(e)
-		if err != nil {
-			fmt.Println("could not extract cert", err)
-			continue
-		}
-		for _, c := range tlogCerts {
-			if cert.Equal(c) {
-				return e, nil
-			}
-		}
 	}
 
-	return nil, errors.New("could not find matching tlog entry")
+	// TODO: Select matching entry based on committer identity.
+	return entries[0], nil
 }
 
 // findTLogEntriesByPayloadAndPK is roughly equivalent to cosign.FindTLogEntriesByPayload,
 // but also filters by the public key used.
-func (c *Client) findTLogEntriesByPayloadAndPK(ctx context.Context, payload, pubKey []byte) (uuids []string, err error) {
-	params := index.NewSearchIndexParamsWithContext(ctx)
-	params.Query = &models.SearchIndex{}
+func (c *Client) findTLogEntries(ctx context.Context, payload, sig, pubKey []byte) (uuids []*models.LogEntryAnon, err error) {
+	query := &models.SearchLogQuery{}
+	query.SetEntries([]models.ProposedEntry{rekorEntry(payload, sig, pubKey)})
 
-	h := sha256.New()
-	h.Write(payload)
-	params.Query.Hash = fmt.Sprintf("sha256:%s", strings.ToLower(hex.EncodeToString(h.Sum(nil))))
+	params := entries.NewSearchLogQueryParamsWithContext(ctx)
+	params.SetEntry(query)
 
-	params.Query.PublicKey = &models.SearchIndexPublicKey{
-		Content: strfmt.Base64(pubKey),
-		Format:  swag.String(models.SearchIndexPublicKeyFormatX509),
-	}
-
-	searchIndex, err := c.Index.SearchIndex(params)
+	resp, err := c.Rekor.Entries.SearchLogQuery(params)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("searching log query: %w", err)
 	}
-	return searchIndex.GetPayload(), nil
+	if len(resp.Payload) == 0 {
+		return nil, errors.New("signature not found in transparency log")
+	}
+
+	// This may accumulate multiple entries on multiple tree IDs.
+	results := make([]*models.LogEntryAnon, 0)
+	for _, logEntry := range resp.GetPayload() {
+		for k, e := range logEntry {
+			// Check body hash matches uuid
+			if err := verifyUUID(k, e); err != nil {
+				continue
+			}
+			results = append(results, &e)
+		}
+	}
+	return results, nil
 }
 
-func (c *Client) Verify(ctx context.Context, commitSHA string, cert *x509.Certificate) (*models.LogEntryAnon, error) {
-	e, err := c.get(ctx, []byte(commitSHA), cert)
+func (c *Client) Verify(ctx context.Context, commitSHA string, sig []byte, cert *x509.Certificate) (*models.LogEntryAnon, error) {
+	e, err := c.get(ctx, []byte(commitSHA), []byte(sig), cert)
 	if err != nil {
 		return nil, err
 	}
@@ -194,4 +178,23 @@ func extractCerts(e *models.LogEntryAnon) ([]*x509.Certificate, error) {
 	}
 
 	return certs, err
+}
+
+func verifyUUID(uid string, e models.LogEntryAnon) error {
+	// Verify and get the UUID.
+	u, err := sharding.GetUUIDFromIDString(uid)
+	if err != nil {
+		return fmt.Errorf("invalid rekor UUID: %w", err)
+	}
+	raw, _ := hex.DecodeString(u)
+
+	// Verify leaf hash matches hash of the entry body.
+	computedLeafHash, err := cosign.ComputeLeafHash(&e)
+	if err != nil {
+		return err
+	}
+	if !bytes.Equal(computedLeafHash, raw) {
+		return fmt.Errorf("computed leaf hash did not match UUID")
+	}
+	return nil
 }
