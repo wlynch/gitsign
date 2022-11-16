@@ -176,7 +176,11 @@ Prints an in-toto style attestation for the specified revision.
 If no revision is specified, HEAD is used.`,
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return o.Run(os.Stdout, args)
+			err := o.Run(os.Stdout, args)
+			defer os.Stdin.Close()
+			defer os.Stderr.Close()
+			defer os.Stdout.Close()
+			return err
 		},
 	}
 	o.AddFlags(cmd)

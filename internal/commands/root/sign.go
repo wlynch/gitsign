@@ -34,8 +34,11 @@ import (
 // commandSign implements gitsign commit signing.
 // This is implemented as a root command so that user can specify the
 // gitsign binary directly in their gitconfigs.
-func commandSign(o *options, s *gsio.Streams, args ...string) error {
+func commandSign(o *options, args ...string) error {
 	ctx := context.Background()
+
+	s := gsio.New(o.Config.LogPath)
+	defer s.Close()
 
 	// Flag validation
 	if o.FlagVerify {

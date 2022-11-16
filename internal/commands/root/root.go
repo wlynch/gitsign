@@ -19,7 +19,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/sigstore/gitsign/internal/config"
-	"github.com/sigstore/gitsign/internal/io"
 )
 
 type options struct {
@@ -50,31 +49,34 @@ func (o *options) AddFlags(cmd *cobra.Command) {
 
 func New(cfg *config.Config) *cobra.Command {
 	o := &options{Config: cfg}
-	s := io.New(o.Config.LogPath)
+	/*
+		s := io.New(o.Config.LogPath)
+		defer s.Close()
+	*/
 
 	rootCmd := &cobra.Command{
 		Use:   "gitsign",
 		Short: "Keyless Git signing with Sigstore!",
 		Args:  cobra.ArbitraryArgs,
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return s.Wrap(func() error {
-				switch {
-				case o.FlagVersion:
-					// Alias root --version with version subcommand
-					for _, item := range cmd.Commands() {
-						if item.Name() == "version" {
-							return item.RunE(item, cmd.Flags().Args())
-						}
+			//return s.Wrap(func() error {
+			switch {
+			case o.FlagVersion:
+				// Alias root --version with version subcommand
+				for _, item := range cmd.Commands() {
+					if item.Name() == "version" {
+						return item.RunE(item, cmd.Flags().Args())
 					}
-				case o.FlagSign:
-					return commandSign(o, s, args...)
-				case o.FlagVerify:
-					return commandVerify(o, s, args...)
-				default:
-					return cmd.Help()
 				}
-				return nil
-			})
+			case o.FlagSign:
+				return commandSign(o, args...)
+			case o.FlagVerify:
+				return commandVerify(o, args...)
+			default:
+				return cmd.Help()
+			}
+			return nil
+			//})
 		},
 	}
 

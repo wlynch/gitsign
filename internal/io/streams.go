@@ -30,13 +30,16 @@ type Streams struct {
 
 	TTYIn  io.Reader
 	TTYOut io.Writer
+
+	close []func() error
 }
 
 func New(logPath string) *Streams {
 	s := &Streams{
-		In:  os.Stdin,
-		Out: os.Stdout,
-		Err: os.Stderr,
+		In:    os.Stdin,
+		Out:   os.Stdout,
+		Err:   os.Stderr,
+		close: []func() error{},
 	}
 
 	if logPath != "" {
@@ -45,7 +48,7 @@ func New(logPath string) *Streams {
 		// As a janky way to preserve error message, tee stderr to
 		// a temp file.
 		if f, err := os.Create(logPath); err == nil {
-			defer f.Close()
+			s.close = append(s.close, f.Close)
 			s.Err = io.MultiWriter(s.Err, f)
 		}
 	}
@@ -54,15 +57,25 @@ func New(logPath string) *Streams {
 	// set the input/output if we can actually open it.
 	tty, err := tty.Open()
 	if err == nil {
-		defer tty.Close()
-		s.TTYIn = tty.Input()
-		s.TTYOut = tty.Output()
+		//defer tty.Close()
+		in := tty.Input()
+		out := tty.Output()
+		s.TTYIn = in
+		s.TTYOut = out
+		s.close = append(s.close, tty.Close, in.Close, out.Close)
 	} else {
 		// If we can't connect to a TTY, fall back to stderr for output (which
 		// will also log to file if GITSIGN_LOG is set).
 		s.TTYOut = s.Err
 	}
 	return s
+}
+
+func (s *Streams) Close() error {
+	for _, fn := range s.close {
+		fn()
+	}
+	return nil
 }
 
 func (s *Streams) Wrap(fn func() error) error {
